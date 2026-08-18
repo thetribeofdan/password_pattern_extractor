@@ -70,5 +70,5 @@ htmlcov/
 .vscode/launch.json
 
 # GIT CHECKLIST
-.GITHUB_CHECKLIST.md
-.GITHUB_SETUP.md
+GITHUB_CHECKLIST.md
+GITHUB_SETUP.md
