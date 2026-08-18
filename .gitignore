@@ -72,3 +72,7 @@ htmlcov/
 # GIT CHECKLIST
 GITHUB_CHECKLIST.md
 GITHUB_SETUP.md
+
+# Reverse Engineered compiled passwords/personas
+target_builder/compiled_personas_pass 2.json
+target_builder/password_semantic_analysis_pass_1.json
