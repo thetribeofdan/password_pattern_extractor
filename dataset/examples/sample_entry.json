@@ -1,0 +1,14 @@
+{
+  "password": "Ars3nal2005!",
+  "tokens": ["ars", "nal"],
+  "numbers": ["2005"],
+  "symbols": ["!"],
+  "pattern": "{token}{year}{symbol}",
+  "capitalization": {
+    "positions": [0],
+    "letters": ["A"],
+    "type": "first_letter"
+  },
+  "length": 12,
+  "token_positions": [0, 4]
+}
