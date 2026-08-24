@@ -9,9 +9,55 @@ from pathlib import Path
 
 RAW_DATASET_DIR = Path("training_dataset/raw")
 CHUNK_OUTPUT_DIR = Path("output/chunks")
+STRUCTURED_OUTPUT_DIR = Path("output/structured")
 STATE_FILE = Path("state/splitter_state.json")
 
-LINES_PER_CHUNK = 5000
+
+def load_dotenv():
+
+    env_file = Path(".env")
+
+    if not env_file.exists():
+
+        return
+
+    with open(env_file, "r", encoding="utf-8") as f:
+
+        for line in f:
+
+            line = line.strip()
+
+            if not line or line.startswith("#") or "=" not in line:
+
+                continue
+
+            key, value = line.split("=", 1)
+
+            os.environ.setdefault(
+                key.strip(),
+                value.strip().strip('"').strip("'")
+            )
+
+
+def get_chunk_size():
+
+    load_dotenv()
+
+    value = os.environ.get("CHUNK_SIZE", "25")
+
+    try:
+
+        chunk_size = int(value)
+
+    except ValueError as error:
+
+        raise ValueError("CHUNK_SIZE must be a positive integer") from error
+
+    if chunk_size < 1:
+
+        raise ValueError("CHUNK_SIZE must be a positive integer")
+
+    return chunk_size
 
 
 # ==========================
@@ -109,8 +155,13 @@ def split_file(
     dataset_prefix = input_file.stem
 
     processed = state["processed_files"].get(dataset_name)
+    chunk_size_changed = processed and processed.get("chunk_size") != lines_per_chunk
 
-    if processed and processed["status"] == "completed":
+    if (
+        processed
+        and processed["status"] == "completed"
+        and processed.get("chunk_size") == lines_per_chunk
+    ):
 
         print(f"[+] Skipping {dataset_name}")
 
@@ -118,11 +169,30 @@ def split_file(
 
     print(f"[+] Splitting {dataset_name}")
 
+    # Remove stale chunks when CHUNK_SIZE changes so old and new batches
+    # cannot be mixed in later pipeline stages.
+    for old_chunk in Path(output_dir).glob(f"{dataset_prefix}_chunk_*.txt"):
+
+        old_chunk.unlink()
+
+    if chunk_size_changed:
+
+        for old_structured in STRUCTURED_OUTPUT_DIR.glob(
+            f"{dataset_prefix}_chunk_*.jsonl"
+        ):
+
+            old_structured.unlink()
+
+        # Existing state belongs to the previous chunk layout.
+        chunk_index = 0
+
+    else:
+
+        chunk_index = state["next_chunk_id"]
+
     current_lines = []
 
     chunk_count = 0
-
-    chunk_index = state["next_chunk_id"]
 
     with open(
         input_file,
@@ -191,7 +261,8 @@ def split_file(
 
     state["processed_files"][dataset_name] = {
         "status": "completed",
-        "chunks_created": chunk_count
+        "chunks_created": chunk_count,
+        "chunk_size": lines_per_chunk
     }
 
     save_state(state)
@@ -208,12 +279,33 @@ def split_file(
 
 def main():
 
+    lines_per_chunk = get_chunk_size()
+
+    reset = "--reset" in os.sys.argv
+
     CHUNK_OUTPUT_DIR.mkdir(
         parents=True,
         exist_ok=True
     )
 
     state = load_state()
+
+    if reset:
+
+        state = {
+            "next_chunk_id": 0,
+            "processed_files": {}
+        }
+
+        save_state(state)
+
+        for old_chunk in CHUNK_OUTPUT_DIR.glob("*_chunk_*.txt"):
+
+            old_chunk.unlink()
+
+        for old_structured in STRUCTURED_OUTPUT_DIR.glob("*_chunk_*.jsonl"):
+
+            old_structured.unlink()
 
     datasets = discover_datasets()
 
@@ -232,7 +324,7 @@ def main():
         split_file(
             dataset,
             CHUNK_OUTPUT_DIR,
-            LINES_PER_CHUNK,
+            lines_per_chunk,
             state
         )
 

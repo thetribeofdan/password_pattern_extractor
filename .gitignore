@@ -1,4 +1,4 @@
-# Python
+# Python bytecode and cache directories (including nested __pycache__ folders)
 __pycache__/
 *.py[cod]
 *$py.class
@@ -35,13 +35,17 @@ env/
 # Raw password datasets (sensitive data)
 training_dataset/raw/
 training_dataset/oroju/
+training_dataset/fine-tune/
 
 # Generated output (regenerable from source code)
 output/
 output/chunks/
 output/structured/
 output/analytics/
-*.jsonl
+
+# Root-level processed dataset exports
+/structured_dataset.jsonl
+/structured_password_dataset.jsonl
 
 # Pipeline state
 state/
@@ -50,6 +54,10 @@ state/splitter_state.json
 # Generated personas and reviews (regenerable)
 target_builder/reviews/
 target_builder/reviews/*.json
+
+# Password re-engineering outputs (sensitive and regenerable)
+/password-re-engineering/pass_1/output/
+/password-re-engineering/pass_2/output/
 
 # IDE and editor files
 .vscode/
@@ -72,7 +80,3 @@ htmlcov/
 # GIT CHECKLIST
 GITHUB_CHECKLIST.md
 GITHUB_SETUP.md
-
-# Reverse Engineered compiled passwords/personas
-target_builder/compiled_personas_pass 2.json
-target_builder/password_semantic_analysis_pass_1.json

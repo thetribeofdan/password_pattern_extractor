@@ -14,20 +14,98 @@ from target_builder.reviewer_export import (
 )
 
 
-def load_json_array(path: str | Path) -> list[dict[str, Any]]:
-    """Load a JSON array of objects from disk."""
+CHUNK_PATTERN = "original_chunk_*.json"
+
+
+def load_json_array(
+    path: str | Path,
+    *,
+    collection_key: str | None = None,
+) -> list[dict[str, Any]]:
+    """Load one JSON object or an array of objects as a list of records."""
     path = Path(path)
 
     with path.open("r", encoding="utf-8") as file:
         data = json.load(file)
 
+    if isinstance(data, dict):
+        if collection_key in data:
+            data = data[collection_key]
+        else:
+            data = [data]
+
     if not isinstance(data, list):
-        raise ValueError(f"{path} must contain a JSON array.")
+        raise ValueError(f"{path} must contain a JSON object or array.")
 
     if not all(isinstance(item, dict) for item in data):
         raise ValueError(f"{path} must contain only JSON objects.")
 
     return data
+
+
+def load_pass1_records(path: str | Path) -> list[dict[str, Any]]:
+    """Load a Pass 1 array or its chunked ``records`` wrapper."""
+    return load_json_array(path, collection_key="records")
+
+
+def load_pass2_records(path: str | Path) -> list[dict[str, Any]]:
+    """Load a Pass 2 array or its chunked ``personas`` wrapper."""
+    return load_json_array(path, collection_key="personas")
+
+
+def chunk_file_pairs(
+    pass1_dir: str | Path,
+    pass2_dir: str | Path,
+) -> list[tuple[Path, Path]]:
+    """Return same-named Pass 1 and Pass 2 chunk files."""
+    pass1_dir = Path(pass1_dir)
+    pass2_dir = Path(pass2_dir)
+
+    if not pass1_dir.is_dir():
+        raise FileNotFoundError(f"Pass 1 directory not found: {pass1_dir}")
+
+    if not pass2_dir.is_dir():
+        raise FileNotFoundError(f"Pass 2 directory not found: {pass2_dir}")
+
+    pass1_files = {
+        path.name: path
+        for path in pass1_dir.glob(CHUNK_PATTERN)
+        if path.is_file()
+    }
+    pass2_files = {
+        path.name: path
+        for path in pass2_dir.glob(CHUNK_PATTERN)
+        if path.is_file()
+    }
+
+    if not pass1_files:
+        raise FileNotFoundError(
+            f"No Pass 1 chunk files matching {CHUNK_PATTERN!r} found in {pass1_dir}"
+        )
+
+    if not pass2_files:
+        raise FileNotFoundError(
+            f"No Pass 2 chunk files matching {CHUNK_PATTERN!r} found in {pass2_dir}"
+        )
+
+    missing_pass2 = sorted(set(pass1_files) - set(pass2_files))
+    missing_pass1 = sorted(set(pass2_files) - set(pass1_files))
+
+    if missing_pass2 or missing_pass1:
+        details: list[str] = []
+
+        if missing_pass2:
+            details.append(f"missing Pass 2: {', '.join(missing_pass2)}")
+
+        if missing_pass1:
+            details.append(f"missing Pass 1: {', '.join(missing_pass1)}")
+
+        raise ValueError("Chunk files do not form matching pairs (" + "; ".join(details) + ").")
+
+    return [
+        (pass1_files[name], pass2_files[name])
+        for name in sorted(pass1_files)
+    ]
 
 
 def _get_pass1_password(record: dict[str, Any], position: int) -> str:
@@ -59,7 +137,10 @@ def _get_persona_and_password(
             f"Pass 2 record {position} is missing a valid persona.attributes object."
         )
 
-    password = attributes.get("password")
+    password = persona.get("password")
+
+    if not isinstance(password, str) or not password:
+        password = attributes.get("password")
 
     if not isinstance(password, str) or not password:
         raise ValueError(
@@ -170,6 +251,31 @@ def build_review_records(
     return review_records
 
 
+def build_review_records_from_chunk_dirs(
+    pass1_dir: str | Path,
+    pass2_dir: str | Path,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """Build review records from every matching Pass 1/Pass 2 chunk pair."""
+    review_records: list[dict[str, Any]] = []
+
+    for pass1_path, pass2_path in chunk_file_pairs(pass1_dir, pass2_dir):
+        review_records.extend(
+            build_review_records(
+                pass1_records=load_pass1_records(pass1_path),
+                pass2_records=load_pass2_records(pass2_path),
+                status=status,
+            )
+        )
+
+    persona_ids = [record["persona_id"] for record in review_records]
+
+    if len(persona_ids) != len(set(persona_ids)):
+        raise ValueError("More than one chunk produced the same review record ID.")
+
+    return review_records
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Build review records by joining Pass 1 and Pass 2 datasets."
@@ -177,19 +283,32 @@ def main() -> None:
 
     parser.add_argument(
         "--pass1",
-        required=True,
-        help="Path to the Pass 1 semantic-analysis JSON array.",
+        type=Path,
+        help="Path to one Pass 1 semantic-analysis JSON array.",
     )
 
     parser.add_argument(
         "--pass2",
-        required=True,
-        help="Path to the Pass 2 persona JSON array.",
+        type=Path,
+        help="Path to one Pass 2 persona JSON array.",
+    )
+
+    parser.add_argument(
+        "--pass1-dir",
+        type=Path,
+        help=f"Directory containing Pass 1 {CHUNK_PATTERN} files.",
+    )
+
+    parser.add_argument(
+        "--pass2-dir",
+        type=Path,
+        help=f"Directory containing Pass 2 {CHUNK_PATTERN} files.",
     )
 
     parser.add_argument(
         "--output-dir",
         required=True,
+        type=Path,
         help="Directory where one review JSON file per matched persona is written.",
     )
 
@@ -219,13 +338,34 @@ def main() -> None:
         reject=args.reject,
     )
 
-    review_records = build_review_records(
-        pass1_records=load_json_array(args.pass1),
-        pass2_records=load_json_array(args.pass2),
-        status=status,
-    )
+    has_file_inputs = args.pass1 is not None or args.pass2 is not None
+    has_directory_inputs = args.pass1_dir is not None or args.pass2_dir is not None
 
-    output_dir = Path(args.output_dir)
+    if has_file_inputs == has_directory_inputs:
+        parser.error(
+            "Provide either --pass1 and --pass2, or --pass1-dir and --pass2-dir."
+        )
+
+    if has_file_inputs:
+        if args.pass1 is None or args.pass2 is None:
+            parser.error("--pass1 and --pass2 must be provided together.")
+
+        review_records = build_review_records(
+            pass1_records=load_pass1_records(args.pass1),
+            pass2_records=load_pass2_records(args.pass2),
+            status=status,
+        )
+    else:
+        if args.pass1_dir is None or args.pass2_dir is None:
+            parser.error("--pass1-dir and --pass2-dir must be provided together.")
+
+        review_records = build_review_records_from_chunk_dirs(
+            pass1_dir=args.pass1_dir,
+            pass2_dir=args.pass2_dir,
+            status=status,
+        )
+
+    output_dir = args.output_dir
     output_paths = [
         output_dir / f"{record['persona_id']}.json"
         for record in review_records
